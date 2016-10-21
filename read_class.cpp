@@ -15,12 +15,17 @@ constexpr uint32_t CLASS_MAGIC = 0xCAFEBABE;
 #define CHECK(expr) \
   if (!(expr)) abort()
 
+#define Abort(fmt,...) \
+  do { \
+    fprintf(stderr, fmt, ##__VA_ARGS__); \
+    abort(); \
+  } while (0)
+
 template <typename T>
 void Read(const char*& p, const char* end, T& value) {
   static_assert(std::is_standard_layout<T>::value, "...");
   if (p + sizeof(T) > end) {
-    fprintf(stderr, "data not enough for Read()\n");
-    exit(1);
+    Abort("data not enough for Read()\n");
   }
   value = 0;
   for (size_t i = 0; i < sizeof(T); ++i) {
@@ -392,68 +397,171 @@ class JavaClass {
       const char* next_p = p + attribute_length;
       if (name == "Code") {
         uint16_t max_stack;
-        Read(p, end_, max_stack);
+        Read(p, next_p, max_stack);
         PrintIndented(indent + 1, "max_stack: %u\n", max_stack);
         uint16_t max_locals;
-        Read(p, end_, max_locals);
+        Read(p, next_p, max_locals);
         PrintIndented(indent + 1, "max_locals: %u\n", max_locals);
         uint32_t code_length;
-        Read(p, end_, code_length);
+        Read(p, next_p, code_length);
         PrintIndented(indent + 1, "code_length: %u\n", code_length);
         PrintCodeArray(indent + 2, p, p + code_length);
         p += code_length;
         uint16_t exception_table_length;
-        Read(p, end_, exception_table_length);
+        Read(p, next_p, exception_table_length);
         PrintIndented(indent + 1, "exception_table_length: %u\n", exception_table_length);
         for (int j = 0; j < exception_table_length; ++j) {
           uint16_t start_pc;
           uint16_t end_pc;
           uint16_t handler_pc;
           uint16_t catch_type;
-          Read(p, end_, start_pc);
-          Read(p, end_, end_pc);
-          Read(p, end_, handler_pc);
-          Read(p, end_, catch_type);
+          Read(p, next_p, start_pc);
+          Read(p, next_p, end_pc);
+          Read(p, next_p, handler_pc);
+          Read(p, next_p, catch_type);
           PrintIndented(indent + 1, "start_pc %u, end_pc %u, handler_pc %u, catch_type %u\n",
                         start_pc, end_pc, handler_pc, catch_type);
         }
         uint16_t code_attribute_count;
-        Read(p, end_, code_attribute_count);
+        Read(p, next_p, code_attribute_count);
         p = PrintAttributeArray(indent + 1, p, code_attribute_count);
       } else if (name == "LineNumberTable") {
         uint16_t line_number_table_length;
-        Read(p, end_, line_number_table_length);
+        Read(p, next_p, line_number_table_length);
         PrintIndented(indent + 1, "line number table length: %u\n", line_number_table_length);
         for (int i = 0; i < line_number_table_length; ++i) {
           uint16_t start_pc;
           uint16_t line_number;
-          Read(p, end_, start_pc);
-          Read(p, end_, line_number);
+          Read(p, next_p, start_pc);
+          Read(p, next_p, line_number);
           PrintIndented(indent + 2, "start_pc 0x%x, line_number %u\n", start_pc, line_number);
         }
       } else if (name == "SourceFile") {
         uint16_t sourcefile_index;
-        Read(p, end_, sourcefile_index);
+        Read(p, next_p, sourcefile_index);
         PrintIndented(indent + 1, "sourcefile: %s\n", GetConstantPoolEntryString(sourcefile_index).c_str());
       } else if (name == "StackMapTable") {
         uint16_t num_of_entries;
-        Read(p, end_, num_of_entries);
+        Read(p, next_p, num_of_entries);
         PrintIndented(indent + 1, "num_of_entries: %u\n", num_of_entries);
+        uint16_t prev_offset = -1;
         for (int i = 0; i < num_of_entries; ++i) {
           uint8_t frame_type = *p++;
           if (frame_type <= 63) {
-            uint8_t offset_delta = frame_type;
-            if (i != 0) {
-              offset_delta++;
-            }
-            PrintIndented(indent + 2, "<0x%x> same_frame\n", offset_delta);
+            uint16_t offset_delta = frame_type;
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> same_frame\n", prev_offset);
           } else if (frame_type <= 127) {
-            uint8_t
+            uint16_t offset_delta = frame_type - 64;
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> same_locals_1_stack_item_frame\n", prev_offset);
+            p = PrintVerificationTypeInfo(indent + 3, p, next_p);
+          } else if (frame_type <= 246) {
+            Abort("reserved frame_type %d\n", frame_type);
+          } else if (frame_type == 247) {
+            uint16_t offset_delta;
+            Read(p, next_p, offset_delta);
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> same_locals_1_stack_item_frame_extended\n", prev_offset);
+            p = PrintVerificationTypeInfo(indent + 3, p, next_p);
+          } else if (frame_type <= 250) {
+            int chop = 251 - frame_type;
+            uint16_t offset_delta;
+            Read(p, next_p, offset_delta);
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> chop_frame %d\n", prev_offset, chop);
+          } else if (frame_type == 251) {
+            uint16_t offset_delta;
+            Read(p, next_p, offset_delta);
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> same_frame_extended\n", prev_offset);
+          } else if (frame_type <= 254) {
+            int append = frame_type - 251;
+            uint16_t offset_delta;
+            Read(p, next_p, offset_delta);
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> append_frame %d\n", prev_offset, append);
+            for (int i = 0; i < append; ++i) {
+              p = PrintVerificationTypeInfo(indent + 3, p, next_p);
+            }
+          } else if (frame_type == 255) {
+            uint16_t offset_delta;
+            uint16_t number_of_locals;
+            uint16_t number_of_stack_items;
+            Read(p, next_p, offset_delta);
+            prev_offset += offset_delta + 1;
+            PrintIndented(indent + 2, "<0x%x> full_frame\n", prev_offset);
+            Read(p, next_p, number_of_locals);
+            PrintIndented(indent + 3, "number_of_locals: %u\n", number_of_locals);
+            for (int i = 0; i < number_of_locals; ++i) {
+              p = PrintVerificationTypeInfo(indent + 3, p, next_p);
+            }
+            Read(p, next_p, number_of_stack_items);
+            PrintIndented(indent + 3, "number_of_stack_items: %u\n", number_of_stack_items);
+            for (int i = 0; i < number_of_stack_items; ++i) {
+              p = PrintVerificationTypeInfo(indent + 3, p, next_p);
+            }
           }
         }
+      } else if (name == "Exceptions") {
+        uint16_t number_of_exceptions;
+        Read(p, next_p, number_of_exceptions);
+        PrintIndented(indent + 1, "number_of_exceptions: %u\n", number_of_exceptions);
+        for (int i = 0; i < number_of_exceptions; ++i) {
+          uint16_t index;
+          Read(p, next_p, index);
+          PrintIndented(indent + 1, "%s\n", GetConstantPoolEntryString(index).c_str());
+        }
+      } else if (name == "InnerClasses") {
+        uint16_t number_of_classes;
+        Read(p, next_p, number_of_classes);
+        PrintIndented(indent + 1, "number_of_classes: %u\n", number_of_classes);
+        for (int i = 0; i < number_of_classes; ++i) {
+          uint16_t inner_class_info_index;
+          uint16_t outer_class_info_index;
+          uint16_t inner_name_index;
+          uint16_t inner_class_access_flags;
+          Read(p, next_p, inner_class_info_index);
+          Read(p, next_p, outer_class_info_index);
+          Read(p, next_p, inner_name_index);
+          Read(p, next_p, inner_class_access_flags);
+          PrintIndented(indent + 1, "class #%d\n", i);
+          PrintIndented(indent + 2, "inner_class %s\n",
+                        GetConstantPoolEntryString(inner_class_info_index).c_str());
+          if (outer_class_info_index != 0) {
+            PrintIndented(indent + 2, "outer_class %s\n",
+                          GetConstantPoolEntryString(outer_class_info_index).c_str());
+          }
+          if (inner_name_index != 0) {
+            PrintIndented(indent + 2, "inner_name %s\n",
+                          GetConstantPoolEntryString(inner_name_index).c_str());
+          }
+          PrintIndented(indent + 2, "access_flags: %s\n",
+                        FindMaskVector(INNER_CLASS_ACCESS_FLAGS_NAME_VECTOR,
+                                       inner_class_access_flags).c_str());
+
+        }
+      } else {
+        Abort("unsupported attribute %s\n", name.c_str());
       }
       p = next_p;
     }
+    return p;
+  }
+
+  const char* PrintVerificationTypeInfo(int indent, const char* p, const char* end) {
+    uint8_t tag = *p++;
+    PrintIndented(indent, "verification info: %s", FindMap(VERIFICATION_TYPE_NAME_MAP, tag));
+    if (tag == ITEM_Object) {
+      uint16_t cpool_index;
+      Read(p, end, cpool_index);
+      printf(" %u  #%s\n", cpool_index, GetConstantPoolEntryString(cpool_index).c_str());
+    } else if (tag == ITEM_Uninitialized) {
+      uint16_t offset;
+      Read(p, end, offset);
+      printf(" 0x%x\n", offset);
+    }
+    printf("\n");
     return p;
   }
 
@@ -461,7 +569,7 @@ class JavaClass {
     const char* p = start;
     while (p < end) {
       uint8_t inst = *p++;
-      PrintIndented(indent, "#0x%x (0x%x)%s ", (uint32_t)(p - start - 1), inst,
+      PrintIndented(indent, "#0x%x %s ", (uint32_t)(p - start - 1),
                     FindMap(CLASS_INST_OP_NAME_MAP, inst));
       switch (inst) {
         case INST_ALOAD:

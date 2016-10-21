@@ -35,6 +35,19 @@ static const std::vector<std::pair<int, const char*>> CLASS_ACCESS_FLAGS_NAME_VE
     {CLASS_ACC_ENUM, "CLASS_ACC_ENUM"},
 };
 
+static const std::vector<std::pair<int, const char*>> INNER_CLASS_ACCESS_FLAGS_NAME_VECTOR = {
+    {INNER_CLASS_ACC_PUBLIC, "INNER_CLASS_ACC_PUBLIC"},
+    {INNER_CLASS_ACC_PRIVATE, "INNER_CLASS_ACC_PRIVATE"},
+    {INNER_CLASS_ACC_PROTECTED, "INNER_CLASS_ACC_PROTECTED"},
+    {INNER_CLASS_ACC_STATIC, "INNER_CLASS_ACC_STATIC"},
+    {INNER_CLASS_ACC_FINAL, "INNER_CLASS_ACC_FINAL"},
+    {INNER_CLASS_ACC_INTERFACE, "INNER_CLASS_ACC_INTERFACE"},
+    {INNER_CLASS_ACC_ABSTRACT, "INNER_CLASS_ACC_ABSTRACT"},
+    {INNER_CLASS_ACC_SYNTHETIC, "INNER_CLASS_ACC_SYNTHETIC"},
+    {INNER_CLASS_ACC_ANNOTATION, "INNER_CLASS_ACC_ANNOTATION"},
+    {INNER_CLASS_ACC_ENUM, "INNER_CLASS_ACC_ENUM"},
+};
+
 static const std::vector<std::pair<int, const char*>> FIELD_ACCESS_FLAGS_NAME_VECTOR = {
     {FIELD_ACC_PUBLIC, "FIELD_ACC_PUBLIC"},
     {FIELD_ACC_PRIVATE, "FIELD_ACC_PRIVATE"},
@@ -287,7 +300,7 @@ std::unordered_map<int, const char*> VERIFICATION_TYPE_NAME_MAP = {
     {ITEM_Null, "ITEM_Null"},
     {ITEM_UninitializedThis, "ITEM_UninitializedThis"},
     {ITEM_Object, "ITEM_Object"},
-    {ITEM_Unitialized, "ITEM_Unitialized"},
+    {ITEM_Uninitialized, "ITEM_Unitialized"},
 };
 
 
