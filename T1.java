@@ -5,6 +5,8 @@ public class T1 {
   int iv = 65536;
   long lv = (1L << 63);
 
+  public int a;
+
   void func1() {
     System.out.printf("hello, world!\n");
   }
