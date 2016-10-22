@@ -1,5 +1,4 @@
 #include <inttypes.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,17 +8,9 @@
 
 #include "java_class.h"
 #include "java_class_namemap.h"
+#include "utils.h"
 
 constexpr uint32_t CLASS_MAGIC = 0xCAFEBABE;
-
-#define CHECK(expr) \
-  if (!(expr)) abort()
-
-#define Abort(fmt,...) \
-  do { \
-    fprintf(stderr, fmt, ##__VA_ARGS__); \
-    abort(); \
-  } while (0)
 
 template <typename T>
 void Read(const char*& p, const char* end, T& value) {
@@ -32,34 +23,6 @@ void Read(const char*& p, const char* end, T& value) {
     value = (value << 8) | *(const uint8_t*)p;
     p++;
   }
-}
-
-static void PrintIndented(int indent, const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  printf("%*s", indent * 2, "");
-  vprintf(fmt, ap);
-  va_end(ap);
-}
-
-static std::string StringPrintf(const char* fmt, ...) {
-  va_list backup_ap;
-  va_start(backup_ap, fmt);
-  va_list ap;
-  va_copy(ap, backup_ap);
-  char buf[40];
-  int result = vsnprintf(buf, sizeof(buf), fmt, ap);
-  if (result < sizeof(buf)) {
-    va_end(ap);
-    va_end(backup_ap);
-    return buf;
-  }
-  va_copy(ap, backup_ap);
-  std::string s(result, '\0');
-  vsnprintf(&s[0], result + 1, fmt, ap);
-  va_end(ap);
-  va_end(backup_ap);
-  return s;
 }
 
 class JavaClass {
