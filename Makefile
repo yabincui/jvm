@@ -1,7 +1,12 @@
 all: read_class read_dex
 
-read_class : read_class.cpp utils.h java_class.h java_class_namemap.h
-	g++ -o $@ $< -std=c++11
+CFLAGS := -std=c++11 -g
 
-read_dex: read_dex.cpp utils.h
-	g++ -o $@ $< -std=c++11
+read_class : read_class.cpp utils.h java_class.h java_class_namemap.h Makefile
+	g++ -o $@ $< $(CFLAGS)
+
+read_dex: read_dex.cpp utils.h Makefile dex.h dex_namemap.h
+	g++ -o $@ $< $(CFLAGS)
+
+clean:
+	rm -rf read_class read_dex *.o

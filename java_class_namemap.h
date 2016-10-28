@@ -304,25 +304,4 @@ std::unordered_map<int, const char*> VERIFICATION_TYPE_NAME_MAP = {
 };
 
 
-static const char* FindMap(const std::unordered_map<int, const char*>& map, int value) {
-  auto it = map.find(value);
-  if (it != map.end()) {
-    return it->second;
-  }
-  return "";
-}
-
-static std::string FindMaskVector(const std::vector<std::pair<int, const char*>>& v, int value) {
-  std::string result;
-  for (auto& p : v) {
-    if (value & p.first) {
-      if (!result.empty()) {
-        result.push_back(' ');
-      }
-      result += p.second;
-    }
-  }
-  return result;
-}
-
 #endif  // JAVA_CASS_NAMEMAP_H_

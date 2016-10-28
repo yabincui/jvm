@@ -6,6 +6,8 @@
 #include <stdlib.h>
 
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #define CHECK(expr) \
   if (!(expr)) abort()
@@ -51,5 +53,43 @@ static std::string GetHexString(const char* p, size_t size) {
   }
   return result;
 }
+
+static uint64_t ReadULEB128(const char*& p, const char* end) {
+  uint64_t result = 0;
+  int shift = 0;
+  while ((*p & 0x80) && p < end) {
+    result |= (*p & 0x7f) << shift;
+    shift += 7;
+    p++;
+  }
+  if (p >= end) {
+    Abort("data not enough to read\n");
+  }
+  result |= *p << shift;
+  p++;
+  return result;
+}
+
+static const char* FindMap(const std::unordered_map<int, const char*>& map, int value) {
+  auto it = map.find(value);
+  if (it != map.end()) {
+    return it->second;
+  }
+  return "";
+}
+
+static std::string FindMaskVector(const std::vector<std::pair<int, const char*>>& v, int value) {
+  std::string result;
+  for (auto& p : v) {
+    if (value & p.first) {
+      if (!result.empty()) {
+        result.push_back(' ');
+      }
+      result += p.second;
+    }
+  }
+  return result;
+}
+
 
 #endif  // UTILS_H_
