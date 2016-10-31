@@ -70,6 +70,31 @@ static uint64_t ReadULEB128(const char*& p, const char* end) {
   return result;
 }
 
+static int64_t ReadLEB128(const char*& p, const char* end) {
+  int64_t result = 0;
+  int shift = 0;
+  while ((*p & 0x80) && p < end) {
+    result |= (*p & 0x7f) << shift;
+    shift += 7;
+    p++;
+  }
+  if (p >= end) {
+    Abort("data not enough to read\n");
+  }
+  result |= *p << shift;
+  if (*p & 0x40) {
+    result |= (-1LL << (shift + 7));
+  }
+  p++;
+  return result;
+}
+
+static int64_t ReadULEB128P1(const char*& p, const char* end) {
+  uint64_t value = ReadULEB128(p, end);
+  int64_t result = (int64_t)value;
+  return result - 1;
+}
+
 static const char* FindMap(const std::unordered_map<int, const char*>& map, int value) {
   auto it = map.find(value);
   if (it != map.end()) {

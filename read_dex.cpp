@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
 #include <vector>
 
 #include "dex.h"
@@ -514,7 +515,416 @@ class JavaDex {
           GetMethod(method_idx).c_str(),
           FindMaskVector(METHOD_ACCESS_FLAGS_NAMEVECTOR, access_flags).c_str(),
           code_off);
+      if (code_off != 0) {
+        PrintCodeItem(indent + 1, code_off);
+      }
+    }
+  }
 
+  void PrintCodeItem(int indent, uint32_t off) {
+    const char* p = data_ + off;
+    uint16_t registers_size;
+    uint16_t ins_size;
+    uint16_t outs_size;
+    uint16_t tries_size;
+    Read(p, end_, registers_size);
+    Read(p, end_, ins_size);
+    Read(p, end_, outs_size);
+    Read(p, end_, tries_size);
+    PrintIndented(indent, "registers_size %u, ins_size %u, outs_size %u, tries_size %u\n",
+                  registers_size, ins_size, outs_size, tries_size);
+    uint32_t debug_info_off;
+    Read(p, end_, debug_info_off);
+    PrintIndented(indent, "debug_info_off 0x%x\n", debug_info_off);
+    uint32_t insns_size;
+    Read(p, end_, insns_size);
+    PrintIndented(indent, "insns_size %u\n", insns_size);
+    PrintInstructions(indent + 1, p, p + insns_size * 2);
+    p += insns_size * 2;
+    if (tries_size != 0u && (insns_size & 1)) {
+      p += 2;
+    }
+    if (tries_size > 0u) {
+      PrintIndented(indent, "try_items size %u\n", tries_size);
+      for (uint32_t i = 0; i < tries_size; ++i) {
+        uint32_t start_addr;
+        uint16_t insn_count;
+        uint16_t handler_off;
+        Read(p, end_, start_addr);
+        Read(p, end_, insn_count);
+        Read(p, end_, handler_off);
+        PrintIndented(indent + 1, "try[%u] range [0x%x-0x%x], handler_off 0x%x\n",
+                      i, start_addr * 2, (start_addr + insn_count) * 2, handler_off);
+      }
+      uint32_t handlers_size = ReadULEB128(p, end_);
+      PrintIndented(indent, "catch handler size %u\n", handlers_size);
+      for (uint32_t i = 0; i < handlers_size; ++i) {
+        int32_t size = ReadLEB128(p, end_);
+        bool has_catch_all = (size <= 0);
+        size = abs(size);
+        PrintIndented(indent + 1, "handler[%u] catch_type_size %u %s\n", i, size,
+                      has_catch_all ? "has catch all" : "");
+        for (int j = 0; j < size; ++j) {
+          uint32_t type_idx = ReadULEB128(p, end_);
+          uint32_t addr = ReadULEB128(p, end_);
+          PrintIndented(indent + 2, "type %s, addr 0x%x\n", GetType(type_idx), addr);
+        }
+        if (has_catch_all) {
+          uint32_t addr = ReadULEB128(p, end_);
+          PrintIndented(indent + 2, "catch_all_addr: 0x%x\n", addr);
+        }
+      }
+    }
+    if (debug_info_off != 0u) {
+      PrintIndented(indent, "debug_info: offset 0x%x\n", debug_info_off);
+      PrintDebugInfoItem(indent + 1, debug_info_off);
+    }
+  }
+
+  void PrintInstructions(int indent, const char* start, const char* end) {
+    const char* p = start;
+    while (p < end) {
+      uint32_t offset = p - start;
+      PrintIndented(indent, "<0x%x> ", offset);
+      uint8_t op = *p++;
+      if (op == 0x00) {
+        if (*p == 0x01) {
+          // packed-switch-payload format
+          p++;
+          uint16_t size;
+          Read(p, end, size);
+          printf("packed_switch_payload, size = %u\n", size);
+          uint32_t first_key;
+          Read(p, end, first_key);
+          uint32_t key = first_key;
+          uint32_t target;
+          for (uint16_t i = 0; i < size; ++i) {
+            Read(p, end, target);
+            PrintIndented(indent + 1, "key %u, target %u\n", key, target);
+            key++;
+          }
+          continue;
+        } else if (*p == 0x02) {
+          // sparse-switch-payload format
+          p++;
+          uint16_t size;
+          Read(p, end, size);
+          printf("sparse_switch_payload, size = %u\n", size);
+          uint32_t keys[size];
+          uint32_t targets[size];
+          for (uint16_t i = 0; i < size; ++i) {
+            Read(p, end, keys[i]);
+          }
+          for (uint16_t i = 0; i < size; ++i) {
+            Read(p, end, targets[i]);
+          }
+          for (uint16_t i = 0; i < size; ++i) {
+            PrintIndented(indent + 1, "key %u, target %u\n", keys[i], targets[i]);
+          }
+          continue;
+        } else if (*p == 0x03) {
+          // fill-array-data-payload format
+          p++;
+          uint16_t element_width;
+          uint32_t size;
+          Read(p, end, element_width);
+          Read(p, end, size);
+          printf("fill-array-data-payload, element_width = %u, size = %u\n", element_width, size);
+          p += element_width * size;
+          continue;
+        }
+      }
+      std::string opstr = FindMap(DEX_OP_NAMEMAP, op);
+      std::transform(opstr.begin(), opstr.end(), opstr.begin(), tolower);
+      printf("%s ", opstr.c_str());
+      uint16_t vA;
+      uint16_t vB;
+      uint16_t B;
+      uint32_t BB;
+      uint16_t vC;
+      uint16_t C;
+      if (op == 0x00) {
+        p++;
+      } else if (op == 0x01 || op == 0x04 || op == 0x07) {
+        GetAB_4(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op == 0x02 || op == 0x05 || op == 0x08) {
+        GetAB_8_16(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op == 0x03 || op == 0x06 || op == 0x09) {
+        p++;
+        GetAB_16_16(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op == 0x0a || op == 0x0b || op == 0x0c || op == 0x0d) {
+        uint8_t vA = *p++;
+        printf("v%u", vA);
+      } else if (op == 0x0e) {
+        p++;
+      } else if (op == 0x0f || op == 0x10 || op == 0x11) {
+        uint8_t vA = *p++;
+        printf("v%u", vA);
+      } else if (op == 0x12) {
+        GetAB_4(p, vA, B);
+        int8_t sB = B;
+        if (sB & 0x08) {
+          sB |= 0xf0;
+        }
+        printf("v%u, #%d", vA, sB);
+      } else if (op == 0x13) {
+        uint8_t vA = *p++;
+        int16_t B;
+        Read(p, end, B);
+        printf("v%u, #%d", vA, B);
+      } else if (op == 0x14) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, #%d", vA, BB);
+      } else if (op == 0x15) {
+        GetAB_8_16(p, vA, B);
+        BB = ((int16_t)B) << 16;
+        printf("v%u, #%d", vA, BB);
+      } else if (op == 0x16) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, #%d", vA, (int16_t)B);
+      } else if (op == 0x17) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, #%d", vA, BB);
+      } else if (op == 0x18) {
+        uint8_t vA = *p++;
+        int64_t B;
+        Read(p, end, B);
+        printf("v%u, #%" PRId64, vA, B);
+      } else if (op == 0x19) {
+        uint8_t vA = *p++;
+        int16_t tB;
+        Read(p, end, tB);
+        int64_t B = ((int64_t)tB) << 48;
+        printf("v%u, #%" PRId64, vA, B);
+      } else if (op == 0x1a) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, string@%u", vA, B);
+      } else if (op == 0x1b) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, string@%u", vA, BB);
+      } else if (op == 0x1c) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, type@%u", vA, B);
+      } else if (op == 0x1d) {
+        uint8_t vA = *p++;
+        printf("v%u", vA);
+      } else if (op == 0x1e) {
+        uint8_t vA = *p++;
+        printf("v%u", vA);
+      } else if (op == 0x1f) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, type@%u", vA, B);
+      } else if (op == 0x20) {
+        GetAB_4(p, vA, vB);
+        Read(p, end, C);
+        printf("v%u, v%u, type@%u", vA, vB, C);
+      } else if (op == 0x21) {
+        GetAB_4(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op == 0x22) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, type@%u", vA, B);
+      } else if (op == 0x23) {
+        GetAB_4(p, vA, vB);
+        Read(p, end, C);
+        printf("v%u, v%u, type@%u  #%s", vA, vB, C, GetType(C));
+      } else if (op == 0x24) {
+        uint16_t vG;
+        GetAB_4(p, vA, vG);
+        Read(p, end, B);
+        uint8_t regs[5];
+        GetCDEF(p, regs);
+        regs[4] = vG;
+        printf("{");
+        for (int i = 0; i < vA; ++i) {
+          printf("v%u, ", regs[i]);
+        }
+        printf("} type@%u  #%s", B, GetType(B));
+      } else if (op == 0x25) {
+        GetAB_8_16(p, vA, B);
+        Read(p, end, C);
+        printf("{v%u .. v%u}, type@%u  #%s", C, C + vA - 1, B, GetType(B));
+      } else if (op == 0x26) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, %u  # payload 0x%x", vA, BB, offset + BB * 2);
+      } else if (op == 0x27) {
+        vA = *p++;
+        printf("v%u", vA);
+      } else if (op == 0x28) {
+        int8_t t = *p++;
+        printf("%d", t);
+      } else if (op == 0x29) {
+        p++;
+        int16_t t;
+        Read(p, end, t);
+        printf("%d", t);
+      } else if (op == 0x2a) {
+        p++;
+        int32_t t;
+        Read(p, end, t);
+        printf("%d", t);
+      } else if (op == 0x2b) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, %d", vA, BB);
+      } else if (op == 0x2c) {
+        GetAB_8_32(p, vA, BB);
+        printf("v%u, %d", vA, BB);
+      } else if (op >= 0x2d && op <= 0x31) {
+        GetABC_8(p, vA, vB, vC);
+        printf("v%u, v%u, v%u", vA, vB, vC);
+      } else if (op >= 0x32 && op <= 0x37) {
+        GetAB_4(p, vA, vB);
+        Read(p, end, C);
+        printf("v%u, v%u, %d", vA, vB, (int16_t)C);
+      } else if (op >= 0x38 && op <= 0x3d) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, %d", vA, (int16_t)B);
+      } else if (op >= 0x44 && op <= 0x51) {
+        GetABC_8(p, vA, vB, vC);
+        printf("v%u, v%u, v%u", vA, vB, vC);
+      } else if (op >= 0x52 && op <= 0x5f) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, field@%u   #%s", vA, B, GetField(B).c_str());
+      } else if (op >= 0x60 && op <= 0x6d) {
+        GetAB_8_16(p, vA, B);
+        printf("v%u, field@%u   #%s", vA, B, GetField(B).c_str());
+      } else if (op >= 0x6e && op <= 0x72) {
+        uint16_t vG;
+        GetAB_4(p, vA, vG);
+        Read(p, end, B);
+        uint8_t regs[5];
+        GetCDEF(p, regs);
+        regs[4] = vG;
+        printf("{");
+        for (int i = 0; i < vA; ++i) {
+          printf("v%u, ", regs[i]);
+        }
+        printf("} meth@%u   #%s", B, GetMethod(B).c_str());
+      } else if (op >= 0x74 && op <= 0x78) {
+        GetAB_8_16(p, vA, B);
+        Read(p, end, C);
+        printf("{v%u .. v%u}, meth@%u   #%s", C, C + vA - 1, B, GetMethod(B).c_str());
+      } else if (op >= 0x7b && op <= 0x8f) {
+        GetAB_4(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op >= 0x90 && op <= 0xaf) {
+        GetABC_8(p, vA, vB, vC);
+        printf("v%u, v%u, v%u", vA, vB, vC);
+      } else if (op >= 0xb0 && op <= 0xcf) {
+        GetAB_4(p, vA, vB);
+        printf("v%u, v%u", vA, vB);
+      } else if (op >= 0xd0 && op <= 0xd7) {
+        GetAB_4(p, vA, vB);
+        Read(p, end, C);
+        printf("v%u, v%u, %d", vA, vB, (int16_t)C);
+      } else if (op >= 0xd8 && op <= 0xe2) {
+        GetABC_8(p, vA, vB, C);
+        printf("v%u, v%u, %d", vA, vB, (int8_t)C);
+      } else {
+        Abort("unknown dex op 0x%x\n", op);
+      }
+      printf("\n");
+    }
+    CHECK(p == end);
+  }
+
+  void GetAB_4(const char*& p, uint16_t& vA, uint16_t& vB) {
+    vA = *p & 0x0f;
+    vB = (*p >> 4) & 0x0f;
+    p++;
+  }
+
+  void GetAB_8_16(const char*& p, uint16_t& vA, uint16_t& vB) {
+    vA = (uint8_t)*p++;
+    Read(p, end_, vB);
+  }
+
+  void GetAB_8_32(const char*& p, uint16_t& vA, uint32_t& vB) {
+    vA = (uint8_t)*p++;
+    Read(p, end_, vB);
+  }
+
+  void GetAB_16_16(const char*& p, uint16_t& vA, uint16_t& vB) {
+    Read(p, end_, vA);
+    Read(p, end_, vB);
+  }
+
+  void GetABC_8(const char*& p, uint16_t& vA, uint16_t& vB, uint16_t& vC) {
+    vA = (uint8_t)*p++;
+    vB = (uint8_t)*p++;
+    vC = (uint8_t)*p++;
+  }
+
+  void GetCDEF(const char*& p, uint8_t* regs) {
+    regs[0] = *p & 0x0f;
+    regs[1] = (*p >> 4) & 0x0f;
+    p++;
+    regs[2] = *p & 0x0f;
+    regs[3] = (*p >> 4) & 0x0f;
+    p++;
+  }
+
+  void PrintDebugInfoItem(int indent, uint32_t off) {
+    const char* p = data_ + off;
+    uint32_t line_start = ReadULEB128(p, end_);
+    uint32_t parameters_size = ReadULEB128(p, end_);
+    PrintIndented(indent, "line_start: %u\n", line_start);
+    PrintIndented(indent, "parametrs_size: %u\n", parameters_size);
+    for (uint32_t i = 0; i < parameters_size; ++i) {
+      uint32_t name_idx = ReadULEB128P1(p, end_);
+      PrintIndented(indent + 1, "parameters[%u] = %s\n", i,
+                    (name_idx == NO_INDEX) ? "" : GetString(name_idx));
+    }
+    PrintIndented(indent, "debug code:\n");
+    while (true) {
+      uint8_t op = *p++;
+      if (op == DBG_END_SEQUENCE) {
+        PrintIndented(indent + 1, "end_sequence\n");
+        break;
+      } else if (op == DBG_ADVANCE_PC) {
+        uint32_t addr_diff = ReadULEB128(p, end_);
+        PrintIndented(indent + 1, "advance_pc 0x%x\n", addr_diff);
+      } else if (op == DBG_ADVANCE_LINE) {
+        int32_t line_diff = ReadLEB128(p, end_);
+        PrintIndented(indent + 1, "advance_line %d\n", line_diff);
+      } else if (op == DBG_START_LOCAL) {
+        uint32_t register_num = ReadULEB128(p, end_);
+        int32_t name_idx = ReadULEB128P1(p, end_);
+        int32_t type_idx = ReadULEB128P1(p, end_);
+        PrintIndented(indent + 1, "start_local r%u, name %s, type %s\n",
+               register_num, (name_idx == NO_INDEX) ? "" : GetString(name_idx),
+               (type_idx == NO_INDEX) ? "" : GetType(type_idx));
+      } else if (op == DBG_START_LOCAL_EXTENDED) {
+        uint32_t register_num = ReadULEB128(p, end_);
+        int32_t name_idx = ReadULEB128P1(p, end_);
+        int32_t type_idx = ReadULEB128P1(p, end_);
+        int32_t sig_idx = ReadULEB128P1(p, end_);
+        PrintIndented(indent + 1, "start_local_extended r%u, name %s, type %s, sig %s\n",
+               register_num, (name_idx == NO_INDEX ? "" : GetString(name_idx)),
+               (type_idx == NO_INDEX ? "" : GetType(type_idx)),
+               (sig_idx == NO_INDEX ? "" : GetString(sig_idx)));
+      } else if (op == DBG_END_LOCAL) {
+        uint32_t register_num = ReadULEB128(p, end_);
+        PrintIndented(indent + 1, "end_local r%u\n", register_num);
+      } else if (op == DBG_RESTART_LOCAL) {
+        uint32_t register_num = ReadULEB128(p, end_);
+        PrintIndented(indent + 1, "restart_local r%u\n", register_num);
+      } else if (op == DBG_SET_PROLOGUE_END) {
+        PrintIndented(indent + 1, "set_prologue_end\n");
+      } else if (op == DBG_SET_EPILOGUE_BEGIN) {
+        PrintIndented(indent + 1, "set_epilogue_begin\n");
+      } else if (op == DBG_SET_FILE) {
+        int32_t name_idx = ReadULEB128P1(p, end_);
+        PrintIndented(indent + 1, "set_file %s\n", name_idx == NO_INDEX ? "" : GetString(name_idx));
+      } else {
+        uint8_t adjusted_opcode = op - 0x0a;
+        int32_t line_diff = -4 + (adjusted_opcode % 15);
+        uint32_t addr_diff = (adjusted_opcode / 15);
+        PrintIndented(indent + 1, "advance pc %u, line %d\n", addr_diff, line_diff);
+      }
     }
   }
 
